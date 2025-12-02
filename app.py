@@ -1,232 +1,329 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import plotly.express as px
-from PIL import Image
-import io
+import pickle
+import os
+import plotly.graph_objects as go
 
-# --------------------------------------------------
-# Impressive Streamlit App Template
-# Single-file app. Drop this into app.py and run:
-# streamlit run app.py
-# --------------------------------------------------
+# Optional loaders
+try:
+    from tensorflow.keras.models import load_model as keras_load_model
+    KERAS_AVAILABLE = True
+except Exception:
+    KERAS_AVAILABLE = False
 
-st.set_page_config(page_title="InsightDash — Impressive UI", layout="wide", page_icon="🚀")
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except Exception:
+    JOBLIB_AVAILABLE = False
 
-# ---------- Styles (minimal custom CSS for polish) ----------
+
+# ------------------ PAGE CONFIG ------------------
+st.set_page_config(page_title="Room Cancellation Predictor",
+                   layout="wide",
+                   page_icon="🏨")
+
+
+# ------------------ CSS THEME (UI FIXED) ------------------
 st.markdown("""
 <style>
-/* page background */
-.stApp {
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 60%);
-  color: #0f172a;
-  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+html, body, [data-testid="stAppViewContainer"] {
+    background: linear-gradient(180deg,#eef4f9 0%, #e6eef6 40%, #f9fbfd 100%) !important;
 }
 
-/* card look */
-.card {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 6px 18px rgba(15,23,42,0.06);
-  padding: 18px;
+.stApp, .stApp * {
+    color: #0f172a !important;
 }
 
-.hero-title {
-  font-size: 28px;
-  font-weight: 700;
-  margin-bottom: 6px;
+/* Main panel */
+.panel {
+    background: #ffffff !important;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 6px 22px rgba(15,23,42,0.05);
+    margin-bottom: 18px;
 }
 
-.hero-sub {
-  color: #475569;
-  margin-top: 0;
-  margin-bottom: 12px;
+.hero {
+    background: #ffffff;
+    padding: 24px;
+    border-radius: 14px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    margin-bottom: 25px;
 }
 
-.small-muted { color: #94a3b8; font-size: 13px; }
+.hero h1 {
+    margin: 0;
+    font-size: 32px;
+}
+.small-note {
+    color: #475569 !important;
+}
 
-.footer { color: #64748b; font-size: 13px; }
+/* ---------------- INPUT FIXES ---------------- */
+
+/* All input boxes white */
+input[type="text"], input[type="number"], textarea, select,
+.stTextInput>div>input {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-radius: 8px !important;
+    border: 1px solid #d1d9e6 !important;
+}
+
+/* Fix for number input spinbutton container */
+div[role="spinbutton"] {
+    background-color: #ffffff !important;
+    border-radius: 8px !important;
+    border: 1px solid #d1d9e6 !important;
+}
+
+/* Fix for + and - buttons */
+div[role="spinbutton"] button {
+    background-color: #e9eef5 !important;
+    color: #0f172a !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 4px 10px !important;
+}
+div[role="spinbutton"] button:hover {
+    background-color: #d8e0ea !important;
+}
+
+/* Fix number text inside input */
+div[role="spinbutton"] input[type="number"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-radius: 6px !important;
+    padding-left: 10px !important;
+}
+
+/* Dropdown visible */
+div[data-baseweb="select"] > div, .stSelectbox>div>div>div {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-radius: 8px !important;
+    border: 1px solid #d1d9e6 !important;
+}
+
+/* Buttons */
+.stButton>button {
+    background: linear-gradient(90deg,#2563eb,#4f46e5) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    padding: 10px 24px !important;
+    border-radius: 10px !important;
+    border: none !important;
+}
+.stButton>button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(37,99,235,0.15);
+}
+
+/* Metric */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #eef3f7;
+}
+
+/* Table */
+table {
+    background: #ffffff !important;
+    color: #0f172a !important;
+}
+
+/* Signature */
+.signature {
+    text-align: center;
+    margin-top: 35px;
+}
+.signature .name {
+    font-family: 'Brush Script MT','Satisfy',cursive;
+    font-size: 36px;
+    font-weight: 800;
+    padding: 10px 30px;
+    border-radius: 999px;
+    color: #0f172a;
+    background: linear-gradient(90deg,#ffffff,#f7faff);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    display: inline-block;
+}
 
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Helper utilities ----------
+
+# ------------------ PATHS ------------------
+MODEL_PATH = "/mnt/data/Hotel reservatiosn.h5"
+PREPROC_PATH = "/mnt/data/preprocessor.pkl"
+
+
+# ------------------ LOADERS ------------------
 @st.cache_data
-def load_sample_data(rows=200):
-    rng = np.random.default_rng(42)
-    df = pd.DataFrame({
-        "customer_id": np.arange(1, rows+1),
-        "age": rng.integers(18, 70, rows),
-        "signup_days_ago": rng.integers(1, 1200, rows),
-        "spend": np.round(rng.normal(120, 60, rows).clip(5), 2),
-        "churn_prob": np.round(rng.random(rows), 2)
-    })
-    return df
-
-# ---------- Sidebar (controls) ----------
-with st.sidebar.container():
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.image("https://raw.githubusercontent.com/streamlit/streamlit/develop/frontend/static/media/brand/streamlit-mark-color.svg", width=64)
-    st.markdown("""
-    <h3 style='margin:6px 0 0 0'>InsightDash</h3>
-    <p class='small-muted'>Beautiful analytics & customer-facing dashboards</p>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    dataset_choice = st.selectbox("Choose action", ["Use sample data", "Upload CSV", "Connect to DB (placeholder)"])
-    st.markdown("\n")
-    show_kpis = st.checkbox("Show KPIs", value=True)
-    show_charts = st.checkbox("Show charts", value=True)
-    st.markdown("---")
-    st.markdown("<p class='small-muted'>Theme</p>", unsafe_allow_html=True)
-    theme = st.radio("Color theme", ["Soft", "Dark (beta)", "Corporate"], index=0)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ---------- Main layout ----------
-header_col1, header_col2 = st.columns([3,1])
-with header_col1:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div class='hero-title'>Deliver delightful dashboards to customers</div>", unsafe_allow_html=True)
-    st.markdown("<div class='hero-sub'>Clean, minimal and conversion-focused interface — ready to plug into your ML model or analytics pipeline.</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-with header_col2:
-    st.markdown("<div class='card' style='text-align:center'>", unsafe_allow_html=True)
-    st.metric(label="Live Users", value="1,248", delta="+8%")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown("\n")
-
-# ---------- Data loading ----------
-if dataset_choice == "Use sample data":
-    df = load_sample_data(300)
-    st.success("Loaded sample dataset (300 rows)")
-
-elif dataset_choice == "Upload CSV":
-    uploaded = st.file_uploader("Upload a CSV file", type=["csv", "txt"], accept_multiple_files=False)
-    if uploaded is not None:
+def load_preprocessor(path=PREPROC_PATH):
+    if os.path.exists(path):
         try:
-            df = pd.read_csv(uploaded)
-            st.success(f"Loaded `{uploaded.name}` — {df.shape[0]} rows, {df.shape[1]} cols")
-        except Exception as e:
-            st.error("Could not read the CSV file. Check format.")
-            df = None
+            with open(path, "rb") as f:
+                return pickle.load(f)
+        except:
+            st.warning("Preprocessor failed to load.")
+    return None
+
+
+@st.cache_resource
+def load_trained_model(path=MODEL_PATH):
+    if not os.path.exists(path):
+        return None
+
+    if path.lower().endswith(".h5") and KERAS_AVAILABLE:
+        try:
+            return ("keras", keras_load_model(path))
+        except:
+            pass
+
+    if JOBLIB_AVAILABLE:
+        try:
+            return ("sklearn", joblib.load(path))
+        except:
+            pass
+
+    try:
+        with open(path, "rb") as f:
+            return ("pickle", pickle.load(f))
+    except:
+        return None
+
+
+# ------------------ HEURISTIC ------------------
+def heuristic_predict(row):
+    score = 0.45*(row["lead_time"]/365) + \
+            0.25*(1 if row["previous_cancellations"]>0 else 0) + \
+            0.15*(1 if row["deposit_type"]=="No Deposit" else 0) + \
+            0.15*(1 if row["booking_changes"]>2 else 0)
+    return min(max(score,0),0.99)
+
+
+# ------------------ HEADER ------------------
+st.markdown("""
+<div class="hero">
+    <h1>🏨 Room Cancellation Predictor</h1>
+    <p class="small-note">Simple, clean interface to estimate booking cancellation risk.</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ------------------ LAYOUT ------------------
+col_left, col_right = st.columns([2, 1])
+
+# ------------------ LEFT: FORM ------------------
+with col_left:
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.subheader("Booking details")
+
+    with st.form("predict_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            lead_time = st.number_input("Lead time (days)", 0, 2000, 30)
+            weekend = st.number_input("Weekend nights", 0, 30, 0)
+            week = st.number_input("Week nights", 0, 365, 2)
+        with c2:
+            prev_cancel = st.number_input("Previous cancellations", 0, 50, 0)
+            changes = st.number_input("Booking changes", 0, 50, 0)
+            deposit = st.selectbox("Deposit type", ["No Deposit","Refundable","Non Refund"])
+
+        g1, g2 = st.columns(2)
+        with g1:
+            adults = st.number_input("Adults", 0, 10, 2)
+            children = st.number_input("Children", 0, 10, 0)
+        with g2:
+            segment = st.selectbox("Market segment",
+                                   ["Direct","Online TA","Offline TA/TO","Groups","Corporate","Complementary","Aviation"])
+
+        submit = st.form_submit_button("Predict")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ------------------ RIGHT: RESULT PANEL ------------------
+with col_right:
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.subheader("Prediction")
+
+    if submit:
+        row = {
+            "lead_time": int(lead_time),
+            "stays_weekend_nights": int(weekend),
+            "stays_week_nights": int(week),
+            "adults": int(adults),
+            "children": int(children),
+            "previous_cancellations": int(prev_cancel),
+            "booking_changes": int(changes),
+            "deposit_type": deposit,
+            "market_segment": segment,
+        }
+
+        # Load model or fallback
+        pre = load_preprocessor()
+        model_info = load_trained_model()
+
+        if pre and model_info:
+            try:
+                mtype, model = model_info
+                X = pd.DataFrame([row])
+                try:
+                    Xp = pre.transform(X)
+                except:
+                    Xp = X
+                if mtype == "keras":
+                    pred = model.predict(Xp)
+                    prob = float(pred[0][1] if pred.ndim == 2 else pred[0])
+                else:
+                    try:
+                        prob = float(model.predict_proba(Xp)[0][1])
+                    except:
+                        prob = float(model.predict(Xp)[0])
+            except:
+                prob = heuristic_predict(row)
+        else:
+            prob = heuristic_predict(row)
+
+        label = "Cancelled" if prob >= 0.5 else "Not cancelled"
+
+        # Metric
+        st.metric("Cancellation probability", f"{prob:.2%}")
+
+        # Donut gauge
+        fig = go.Figure(go.Pie(
+            values=[prob, 1-prob],
+            hole=0.65,
+            marker_colors=["#ef4444", "#10b981"],
+            hoverinfo="label+percent",
+            textinfo="none"
+        ))
+        fig.update_layout(showlegend=False, margin=dict(t=10,b=10,l=10,r=10),
+                          height=250,
+                          annotations=[dict(text=f"{prob:.0%}", x=0.5,y=0.5,
+                                            font_size=28, showarrow=False)])
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Result label
+        if label == "Cancelled":
+            st.error("Prediction: CANCELLED")
+        else:
+            st.success("Prediction: NOT CANCELLED")
+
     else:
-        st.info("No file uploaded yet — using sample data preview")
-        df = load_sample_data(60)
-
-else:
-    st.info("DB connectors are placeholders in this template — drop your connection code here.")
-    df = load_sample_data(120)
-
-# ---------- Top KPI cards ----------
-if show_kpis and df is not None:
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.metric("Total customers", value=f"{len(df):,}")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with k2:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.metric("Avg. age", value=f"{df['age'].mean():.1f}" if 'age' in df.columns else "—")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with k3:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.metric("Avg. spend", value=f"₹{df['spend'].mean():.2f}" if 'spend' in df.columns else "—")
-        st.markdown("</div>", unsafe_allow_html=True)
-    with k4:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.metric("Avg. churn", value=f"{df['churn_prob'].mean():.2f}" if 'churn_prob' in df.columns else "—")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown("\n")
-
-# ---------- Main content: data preview and charts ----------
-main_left, main_right = st.columns([2,1])
-with main_left:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Data preview")
-    if df is not None:
-        st.dataframe(df.head(10))
-
-        # Quick filters
-        with st.expander("Quick filters"):
-            cols = df.select_dtypes(include=["number"]).columns.tolist()
-            chosen = st.selectbox("Filter numeric column", [None] + cols)
-            if chosen:
-                rng = st.slider("Filter range", float(df[chosen].min()), float(df[chosen].max()), (float(df[chosen].min()), float(df[chosen].max())))
-                df = df[df[chosen].between(rng[0], rng[1])]
-                st.write(f"Filtered to {len(df)} rows")
-
-    else:
-        st.info("No data to preview")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-with main_right:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Actions")
-    st.write("Use the quick action buttons below to export or visualize the dataset.")
-    if st.button("Download sample CSV"):
-        tmp = load_sample_data(50)
-        csv = tmp.to_csv(index=False).encode('utf-8')
-        st.download_button("Click to download", data=csv, file_name="sample_data.csv", mime='text/csv')
-
-    if st.button("Show simple report"):
-        st.balloons()
-        st.success("Report generated — use the charts panel to the left")
+        st.info("Fill the form and click Predict.")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Charts ----------
-if show_charts and df is not None:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.subheader("Charts & insights")
-    col1, col2 = st.columns(2)
-    with col1:
-        # Histogram
-        num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-        if num_cols:
-            choice = st.selectbox("Choose numeric for histogram", num_cols, index=0)
-            fig, ax = plt.subplots(figsize=(6,3))
-            ax.hist(df[choice].dropna(), bins=30)
-            ax.set_title(f"Distribution of {choice}")
-            st.pyplot(fig)
-    with col2:
-        if 'age' in df.columns and 'spend' in df.columns:
-            fig = px.scatter(df, x='age', y='spend', size='spend', hover_data=['customer_id'] if 'customer_id' in df.columns else None, title='Age vs Spend')
-            st.plotly_chart(fig, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- Predict / Action area (placeholder for ML) ----------
-st.markdown("\n")
-st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.subheader("Customer action center")
-with st.form(key='action_form'):
-    colA, colB, colC = st.columns(3)
-    with colA:
-        cid = st.text_input("Customer ID")
-        age = st.number_input("Age", min_value=0, max_value=120, value=30)
-    with colB:
-        recent_days = st.number_input("Days since signup", min_value=0, max_value=5000, value=120)
-        spend = st.number_input("Avg spend", min_value=0.0, format="%.2f", value=100.0)
-    with colC:
-        engage_score = st.slider("Engagement (0-100)", 0, 100, 50)
-
-    submitted = st.form_submit_button("Suggest action")
-    if submitted:
-        # Placeholder logic — replace with real model prediction
-        score = (100 - engage_score) * 0.01 + (spend / (spend + 100)) * 0.4 + (1 if recent_days < 90 else 0) * 0.2
-        recommended = "Send discount & email campaign" if score > 0.5 else "Standard nurture sequence"
-        st.success(f"Recommended action: {recommended}")
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ---------- Footer ----------
-st.markdown("\n")
-footer_col1, footer_col2 = st.columns([3,1])
-with footer_col1:
-    st.markdown("<p class='footer'>Built with ❤️ — customize this template for your product, plug in your models or analytics, and ship delightful dashboards to customers.</p>", unsafe_allow_html=True)
-with footer_col2:
-    st.markdown("<div style='text-align:right'><small class='small-muted'>v1.0 • InsightDash</small></div>", unsafe_allow_html=True)
-
-# ----------------- End -----------------
+# ------------------ SIGNATURE ------------------
+st.markdown("""
+<div class="signature">
+    <div class="name">Created by Venky &amp; Subba Reddy</div>
+</div>
+""", unsafe_allow_html=True)
